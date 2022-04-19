@@ -136,6 +136,7 @@ type App struct {
 	timeout     time.Duration // Default to 0, no time out.
 	serverName  string        // Gear/1.7.6
 	logger      *log.Logger
+	errorLogger ErrorLogger
 	parseError  func(error) HTTPError
 	renderError func(HTTPError) (code int, contentType string, body []byte)
 	onerror     func(*Context, HTTPError)
@@ -174,6 +175,9 @@ func New() *App {
 	app.Set(SetOnError, func(ctx *Context, err HTTPError) {
 		ctx.Error(err)
 	})
+	app.Set(SetErrorLogger, ErrorLoggerFunc(func(msg string, kvs ...interface{}) {
+		app.logger.Printf("%s %s", msg, kvs)
+	}))
 	return app
 }
 
@@ -284,6 +288,8 @@ const (
 	// Set true and proxy header fields will be trusted
 	// Default to false.
 	SetTrustedProxy
+
+	SetErrorLogger
 )
 
 // Set add key/value settings to app. The settings can be retrieved by `ctx.Setting(key)`.
@@ -379,6 +385,12 @@ func (app *App) Set(key, val interface{}) *App {
 		case SetTrustedProxy:
 			if _, ok := val.(bool); !ok {
 				panic(Err.WithMsg("SetTrustedProxy setting must be `bool`"))
+			}
+		case SetErrorLogger:
+			if logger, ok := val.(ErrorLogger); !ok {
+				panic(Err.WithMsg("SetErrorLogger setting must implemented `gear.ErrorLogger`"))
+			} else {
+				app.errorLogger = logger
 			}
 		}
 		app.settings[k] = val
@@ -504,16 +516,10 @@ func (app *App) Start(addr ...string) *ServerListener {
 func (app *App) Error(err interface{}) {
 	if err := ErrorWithStack(err, 2); err != nil {
 		str, e := err.Format()
-		f := app.logger.Flags() == 0
-		switch {
-		case f && e == nil:
-			app.logger.Printf("[%s] ERR %s\n", time.Now().UTC().Format("2006-01-02T15:04:05.999Z"), str)
-		case f && e != nil:
-			app.logger.Printf("[%s] CRIT %s\n", time.Now().UTC().Format("2006-01-02T15:04:05.999Z"), err.String())
-		case !f && e == nil:
-			app.logger.Printf("ERR %s\n", str)
-		default:
-			app.logger.Printf("CRIT %s\n", err.String())
+		if e == nil {
+			app.errorLogger.Error("InternalServerError.", "error", str)
+		} else {
+			app.errorLogger.Error("InternalServerError.", "error", err.String())
 		}
 	}
 }
